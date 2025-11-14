@@ -1,27 +1,105 @@
 #!/usr/bin/env bash
 # ============================================================
+# Backup Script to a Temporary Mounted Image
 # Script de sauvegarde vers une image montée temporairement
-# Auteur : CY 😊 
-# version corrigée et optimisée avec compression
-# Avec l'aide de GPT-5 le 13 nov 2025  
+#
+# Author / Auteur : CY 😊 
+# Updated with GPT-5.1 — 14 Nov 2025
+# Mis à jour avec GPT-5.1 — 14 nov 2025
 # ============================================================
+
+###############################################################
+# === Language Selection / Sélection de la langue ============
+###############################################################
+# Possible: en, fr
+LANG_CODE="fr"
 
 # Capture du temps de démarrage
 start_time=$(date +%s%3N)
 
-# Répertoire temporaire de montage
-BACKUP_TEMP_DIR='/mnt/.tempdir'
-
-# Chargement des fonctions utilitaires
-#source "$(dirname "$0")/myfunctions.sh"
-#
 ###############################################################
-DEBUG_ME=false
-MYNAME=$(basename $0)
-#
-# Define some fancy colors only if connected to a terminal.
-# Thus output to file is no more cluttered
-#
+# === Multilingual Message Dictionaries / Dictionnaires ======
+###############################################################
+
+# ----- French / Français -----
+declare -A MSG_fr=(
+    [FATAL]="❌ Erreur fatale"
+    [UNKNOWN_OPTION]="⚠️ Option inconnue ignorée"
+    [PASS_PROMPT]="😵 Mot de passe : "
+    [DECRYPT_OK]="✅ Déchiffrement terminé avec succès"
+    [DECRYPT_FAIL]="❌ Erreur dans le déchiffrement"
+    [MISSING_SRC]="Répertoire à sauvegarder manquant"
+    [MISSING_DEST]="Destination du fichier image manquante"
+    [HELP_TITLE]="Script de sauvegarde vers une image montée temporairement"
+    [HELP_USAGE]="Deux arguments sont nécessaires"
+    [HELP_SRC]="Répertoire à sauvegarder"
+    [HELP_DEST]="Destination du fichier image"
+    [HELP_OPTIONS]="Options"
+    [COPY_BEGIN]="📁 Copie des fichiers…"
+    [COPY_OK]="Copie terminée avec succès."
+    [COPY_FAIL]="❌ Erreur pendant la copie des fichiers."
+    [CALC_SIZE]="📐 Calcul de la taille…"
+    [NOT_ENOUGH_SPACE]="❌ Pas assez d’espace disque"
+    [IMG_CREATE]="📦 Création de l’image…"
+    [IMG_FORMAT_FAIL]="🧱 Erreur lors du formatage de l’image"
+    [MOUNT_FAIL]="Impossible de monter l’image"
+    [CLEANUP]="🧹 Nettoyage…"
+    [CLEANUP_DONE]="🫧 Nettoyage terminé."
+    [COMPRESS]="🗜️ Compression de l’image…"
+    [COMPRESS_OK]="✅ Image compressée."
+    [ENCRYPT]="🔐 Chiffrement de l’image…"
+    [ENCRYPT_OK]="✅ Image chiffrée."
+    [HMAC_OK]="🔐 Code d’authentification généré."
+    [TIME]="⏳ Temps écoulé"
+)
+
+# ----- English / Anglais -----
+declare -A MSG_en=(
+    [FATAL]="❌ Fatal error"
+    [UNKNOWN_OPTION]="⚠️ Unknown option ignored"
+    [PASS_PROMPT]="😵 Passphrase: "
+    [DECRYPT_OK]="✅ Decryption completed successfully"
+    [DECRYPT_FAIL]="❌ Error during decryption"
+    [MISSING_SRC]="Source directory missing"
+    [MISSING_DEST]="Destination image missing"
+    [HELP_TITLE]="Backup script to a temporary mounted image"
+    [HELP_USAGE]="Two arguments are required"
+    [HELP_SRC]="Directory to back up"
+    [HELP_DEST]="Destination of the image file"
+    [HELP_OPTIONS]="Options"
+    [COPY_BEGIN]="📁 Copying files…"
+    [COPY_OK]="✅ Copy completed successfully."
+    [COPY_FAIL]="❌ Error during file copy."
+    [CALC_SIZE]="📐 Calculating size…"
+    [NOT_ENOUGH_SPACE]="❌ Not enough disk space"
+    [IMG_CREATE]="📦 Creating image…"
+    [IMG_FORMAT_FAIL]="🧱 Error while formatting the image"
+    [MOUNT_FAIL]="Unable to mount image"
+    [CLEANUP]="🧹 Cleaning up…"
+    [CLEANUP_DONE]="🫧 Cleanup done."
+    [COMPRESS]="🗜️ Compressing image…"
+    [COMPRESS_OK]="✅ Image compressed."
+    [ENCRYPT]="🔐 Encrypting image…"
+    [ENCRYPT_OK]="✅ Image encrypted."
+    [HMAC_OK]="🔐 Message authentication code generated."
+    [TIME]="⏳ Elapsed time"
+)
+
+###############################################################
+# === Function to fetch translated messages ==================
+###############################################################
+msg() {
+ 
+    local key="$1"
+    local lang="MSG_${LANG_CODE}"
+    declare -n dict="$lang"   # <-- référence vers le bon tableau
+    echo -e "${dict[$key]}"
+
+}
+
+###############################################################
+# === Colors / Couleurs ======================================
+###############################################################
     [ -t 1 ] && {
             RED=$(tput setaf 1)
             GREEN=$(tput setaf 2)
@@ -48,214 +126,177 @@ MYNAME=$(basename $0)
             NOATT=""
     }
 
-# Echos traces with yellow text to distinguish from other output
-trace () {
-    echo -e "${!2:-$YELLOW}${1}${NOATT}"
+trace() {
+    echo -e "${!2:-$YELLOW}${1}${RESET}"
 }
 
-
-# Echos an error string in red text and exit
 fatal() {
-    echo "${RED}[FATAL] $@ ${NOATT}" >&2
+    echo -e "${RED}[$(msg FATAL)] $*${RESET}" >&2
     exit 1
 }
 
+###############################################################
+# === Password Handling / Gestion du mot de passe ============
+###############################################################
+get_pass() {
+    if [[ -f "$BPWD" ]]; then
+        pass_opt="-pass file:$BPWD"
+        key="$(cat "$BPWD")"
+    else
+        read -s -p "$(msg PASS_PROMPT)" key
+        echo
+        pass_opt="-pass pass:$key"
+    fi
+}
 
 ###############################################################
-#
-# Variables principales
+# === Arguments ==============================================
+###############################################################
 SOURCE_DIR="$1"
 DEST_DIR="$2"
 VERBOSE=false
 COMPRESS=false
 ENCRYPT=false
 SHOW_HELP=false
+BPWD='/root/.backup_pass'
 DATE=$(date +%A-%d-%m-%Y)
 HOSTNAME=$(hostname -s)
+BACKUP_TEMP_DIR='/mnt/.tempdir/'
+DEBUG_ME=false
 
-# Lecture des options supplémentaires
-if [[ $# -ge 2 ]]; then shift 2; SHIFTED=true; fi
+# Handle options
+if [[ ! $1 == -* ]]; then shift 2; fi
 
-while getopts dvzeh flag; do
+while getopts "dvzehx:" flag; do
     case "${flag}" in
-        -d|d) DEBUG_ME=true ;;
-        -v|v) VERBOSE=true ;;
-        -z|z) COMPRESS=true ;;
-        -e|e) ENCRYPT=true ;;
-        -h|h) SHOW_HELP=true;;
-        *) [[ ${SHIFTED:-false} ]] && trace "⚠️ Option inconnue ignorée : $opt" YELLOW ;;
+        d) DEBUG_ME=true ;;
+        v) VERBOSE=true ;;
+        z) COMPRESS=true ;;
+        e) ENCRYPT=true ;;
+        h) SHOW_HELP=true ;;
+        x) DECRYPT=${OPTARG} ;;
+        *) trace "$(msg UNKNOWN_OPTION): ${flag}" ;;
     esac
 done
 
-# Vérification du nombre minimal d’arguments et help
-if ( $SHOW_HELP || [ ! "$SOURCE_DIR" ] || [ ! "$DEST_DIR" ]); then
-    MESSAGE_COLOR=LIGHTGRAY
+if $DEBUG_ME; then set -x; fi
 
-    if ( [ ! "$SOURCE_DIR" ] || [ ! "$DEST_DIR" ]); then trace "-------------------------------------------------------------------------" ; fi
-
-    if ( [ ! "$SOURCE_DIR" ] ); then trace "    ⚠️ Répertoire à sauvegarder manquant" RED; fi
-    if ( [ ! "$DEST_DIR" ]); then trace "    ⚠️ Destination du fichier image manquant" RED; fi
-
-  
-    trace "-------------------------------------------------------------------------" 
-    trace "  Script de sauvegarde vers une image montée temporairement" $MESSAGE_COLOR
-    trace "  version corrigée et optimisée avec compression avec l'aide de GPT-5" $MESSAGE_COLOR
-    trace "-------------------------------------------------------------------------" 
-    echo ""      
-    trace "         Deux arguments sont nécessaires" $MESSAGE_COLOR
-    echo ""
-    trace "         1️⃣  Répertoire à sauvegarder" $MESSAGE_COLOR
-    trace "         2️⃣  Destination du fichier image" $MESSAGE_COLOR
-    echo "" 
-    trace "-------------------------------------------------------------------------" 
-    echo ""
-    trace "  Options" $MESSAGE_COLOR
-    trace "    -v, v      details des operations de copie" $MESSAGE_COLOR
-    trace "    -z, z      activée la compression" $MESSAGE_COLOR
-    trace "    -e, e      activée l'encryption" $MESSAGE_COLOR
-    trace "    -h, h      afficher cette aide et quitter" $MESSAGE_COLOR
-    trace "               ------------------------------------------------------------"
-    trace "               *** ATTENTION pour encryption ***" $MESSAGE_COLOR
-    trace "               Pour Cron ou Script, ceci est necessaire" $MESSAGE_COLOR
-    trace "               ------------------------------------------------------------"
-    trace "               sudo nano /root/.backup_pass" $MESSAGE_COLOR
-    trace "               Mets dedans un mot de passe fort, ex. généré ainsi:" $MESSAGE_COLOR
-    trace "                   openssl rand -base64 32" $MESSAGE_COLOR
-    trace "               sudo chmod 400 /root/.backup_pass" $MESSAGE_COLOR
-    trace "               ------------------------------------------------------------"
-    trace "               pour déchiffrer automatiquement" $MESSAGE_COLOR
-    trace "               ------------------------------------------------------------"
-    trace '               openssl enc -aes-256-cbc -d -pbkdf2 \' $MESSAGE_COLOR
-    trace '                   -in "${IMAGE}.enc" -out "${IMAGE}" \' $MESSAGE_COLOR
-    trace '                   -pass file:/root/.backup_pass' $MESSAGE_COLOR
-    echo ""
-    trace "-------------------------------------------------------------------------"
-    echo ""
-    trace "  Exemple : sudo bash $0 /home/$USER /mnt/backup -v -z" $MESSAGE_COLOR
-    echo ""
-    trace "-------------------------------------------------------------------------"
+###############################################################
+# === Help Screen / Écran d'aide =============================
+###############################################################
+MESSAGE_COLOR=LIGHTGRAY
+if $SHOW_HELP || [ -z "$SOURCE_DIR" ] || [ -z "$DEST_DIR" ]; then
+    trace "------------------------------------------------" $MESSAGE_COLOR
+    trace "$(msg HELP_TITLE)" $MESSAGE_COLOR
+    trace "------------------------------------------------" $MESSAGE_COLOR
+    trace "$(msg HELP_USAGE)" $MESSAGE_COLOR
+    trace "  1\) $(msg HELP_SRC)" $MESSAGE_COLOR
+    trace "  2\) $(msg HELP_DEST)" $MESSAGE_COLOR
+    trace "------------------------------------------------" $MESSAGE_COLOR
+    trace "$(msg HELP_OPTIONS)" $MESSAGE_COLOR
+    trace "  -d Debug" $MESSAGE_COLOR
+    trace "  -v Verbose" $MESSAGE_COLOR
+    trace "  -z Compression" $MESSAGE_COLOR
+    trace "  -e Encryption" $MESSAGE_COLOR
+    trace "  -x File   Decrypt" $MESSAGE_COLOR
     exit 0
 fi
 
-# Fonction de nettoyage (appelée automatiquement à la fin ou en cas d’erreur)
+###############################################################
+# === Cleanup / Nettoyage ====================================
+###############################################################
 cleanup() {
-    trace '=== 🧹 Nettoyage...' WHITE
-    if mountpoint -q "$BACKUP_TEMP_DIR"; then
-        umount "$BACKUP_TEMP_DIR"
-    fi
-    shopt -u dotglob
-    if [[ -n "$BACKUP_TEMP_DIR" && -d "$BACKUP_TEMP_DIR" ]]; then
-        rm -rf "$BACKUP_TEMP_DIR"
-    fi
-    trace '=== ✅ Nettoyage terminé.' WHITE
+    trace "$(msg CLEANUP)" WHITE
+    mountpoint -q "$BACKUP_TEMP_DIR" && umount "$BACKUP_TEMP_DIR"
+    rm -rf "$BACKUP_TEMP_DIR"
+    trace "$(msg CLEANUP_DONE)" WHITE
 }
 
-# Trap 
-trap cleanup EXIT SIGTERM
-trap 'echo "${RED}[ERROR] Occurred on line $LINENO: $BASH_COMMAND (exit code: $?)${NOATT}" && exit 1' ERR
-if $DEBUG_ME; then trap 'echo "${WHITE}[DEBUG] running: $BASH_COMMAND${NOATT}"' DEBUG; fi
+trap cleanup EXIT
 
-# Verification pour etre sur que le password est disponible
-if $ENCRYPT && [[ ! -t 1 && ! -f /root/.backup_pass ]]; then
-    ENCRYPT=false
-    trace "⚠️ Encryption ignorée, mot de passe non existant" YELLOW
+###############################################################
+# === Encryption checks / Vérif Encryption ====================
+###############################################################
+if $ENCRYPT; then
+    get_pass
 fi
 
-# Définition du chemin final de l’image
-[[ "$DEST_DIR" != */ ]] && IMAGE="${DEST_DIR}/${HOSTNAME}-${DATE}.img" || IMAGE="${DEST_DIR}${HOSTNAME}-${DATE}.img"
-[[ "$SOURCE_DIR" != */ ]] && SOURCE_DIR="${SOURCE_DIR}/"
+###############################################################
+# === Compute size / Calcul taille ===========================
+###############################################################
+trace "$(msg CALC_SIZE)"
+SIZE=$(du -sm "$SOURCE_DIR" | cut -f1)
 
-# Bloc et arguments de copie
-BLOCKSIZE='1M'
-[[ "$VERBOSE" == true ]] && CP_ARGS="-rLv" || CP_ARGS="-rL"
-
-# Taille du dossier à sauvegarder (en Mo)
-trace "=== Calcul de la taille de ${SOURCE_DIR} ..."
-#SIZE=$(du -smL "$SOURCE_DIR" | cut -f1)
-#SIZE=$((SIZE + SIZE / 5)) # marge de 10 %
-# Plus fiable que du on va voir
-SIZE=$(rsync -aL --dry-run --stats ${SOURCE_DIR} ${SOURCE_DIR} | \
-        grep "Total transferred file size"   | tr -d ','   | \
-        awk '{bytes=$5; mb=bytes/1024/1024; if (mb<1) print 1; else printf "%.0f\n", mb*1.15}')
-
-# Vérification de l’espace disque disponible
+###############################################################
+# === Space check / Vérif espace =============================
+###############################################################
 AVAIL=$(df -m "$DEST_DIR" | awk 'NR==2 {print $4}')
-if (( AVAIL < SIZE )); then
-    fatal "❌ Pas assez d’espace sur $DEST_DIR (disponible: ${AVAIL}M, requis: ${SIZE}M)"
-    exit 1
-fi
+(( AVAIL < SIZE )) && fatal "$(msg NOT_ENOUGH_SPACE)"
 
-trace "=== 💾 Création de l’image ${IMAGE} (${SIZE} Mo environ)..."
+###############################################################
+# === Create image file / Création de l’image ================
+###############################################################
+trace "$(msg IMG_CREATE)"
+IMAGE="${DEST_DIR}/${HOSTNAME}-${DATE}.img"
+dd if=/dev/zero of="$IMAGE" bs=1M count=$SIZE status=none
 
-# Création du fichier image
-dd if=/dev/zero of="${IMAGE}" bs=${BLOCKSIZE} count=${SIZE} status=none || {
-    fatal "Erreur lors de la création de l’image ${IMAGE}"
-    exit 1
-}
+mkfs.ext4 -L BACKUP "$IMAGE" > /dev/null 2>&1 || fatal "$(msg IMG_FORMAT_FAIL)"
 
-mkfs.vfat -n 'BACKUP' "${IMAGE}" > /dev/null 2>&1 || {
-    fatal "Erreur lors du formatage de l’image ${IMAGE}"
-    exit 1
-}
-
-# Montage temporaire
 mkdir -p "$BACKUP_TEMP_DIR"
-if ! mount -o loop "${IMAGE}" "$BACKUP_TEMP_DIR"; then
-    fatal "Erreur : impossible de monter ${IMAGE}"
-    exit 1
+mount -o loop "$IMAGE" "$BACKUP_TEMP_DIR" || fatal "$(msg MOUNT_FAIL)"
+
+###############################################################
+# === File copy / Copie ======================================
+###############################################################
+trace "$(msg COPY_BEGIN)"
+cp -rL "$SOURCE_DIR"* "$BACKUP_TEMP_DIR" || fatal "$(msg COPY_FAIL)"
+trace "$(msg COPY_OK)" GREEN
+
+###############################################################
+# === Compression ============================================
+###############################################################
+if $COMPRESS; then
+    trace "$(msg COMPRESS)"
+    gzip -f -9 "$IMAGE"
+    IMAGE="${IMAGE}.gz"
+    trace "$(msg COMPRESS_OK)" GREEN
 fi
 
-# Copie des fichiers
-trace "=== 📁 Copie des fichiers depuis ${SOURCE_DIR} ..."
-shopt -s dotglob
-cp $CP_ARGS "${SOURCE_DIR}"* "$BACKUP_TEMP_DIR"
-cp_status=$?
-sync
+###############################################################
+# === Encryption =============================================
+###############################################################
+if $ENCRYPT; then
+    trace "$(msg ENCRYPT)"
 
-# Vérification de la copie
-if [ $cp_status -eq 0 ]; then
-    trace "=== ✅ Copie terminée avec succès." GREEN
-else
-    fatal "=== ❌ Erreur pendant la copie des fichiers."
-    exit 1
-fi
+    openssl enc -aes-256-ctr -salt -pbkdf2 \
+        -in "$IMAGE" -out "${IMAGE}.enc" $pass_opt \
+        || fatal "$(msg ENCRYPT_FAIL)"
 
-# Option de compression
-if [ "$COMPRESS" = true ]; then
-    trace "=== 🌀 Compression de l’image ${IMAGE} ..."
-    gzip -f -9 "${IMAGE}"
-    if [ $? -eq 0 ]; then
-        trace "=== ✅ Image compressée : ${IMAGE}.gz" GREEN
-        IMAGE="${IMAGE}.gz"
-    else
-        fatal "=== ❌ Erreur lors de la compression de ${IMAGE}"
-        exit 1
-    fi
-fi
+    openssl dgst -sha256 -hmac "$key" "${IMAGE}.enc" > "${IMAGE}.enc.hmac"
+    trace "$(msg HMAC_OK)"
 
-# Chiffrement (si -e)
-if [ "$ENCRYPT" = true ]; then
-    trace "=== 🔐 Chiffrement de l’image ${IMAGE} ..."
-    openssl enc -aes-256-cbc -salt -pbkdf2 -in "${IMAGE}" -out "${IMAGE}.enc" -pass "file:/root/.backup_pass" || fatal "Erreur de chiffrement"
-    rm -f "${IMAGE}"
+    rm -f "$IMAGE"
     IMAGE="${IMAGE}.enc"
-    trace "=== ✅ Image chiffrée : ${IMAGE}" GREEN
+
+    trace "$(msg ENCRYPT_OK)" GREEN
 fi
 
-# Capture du temps de fin
-end_time=$(date +%s%3N)
-elapsed=$((end_time - start_time))
+###############################################################
+# === Time / Temps ===========================================
+###############################################################
+end=$(( $(date +%s%3N) - start_time ))
+#trace "$(msg TIME): ${end} ms"
 
 # Affichage du temps total
-if (( elapsed > 60000 )); then
-    minutes=$((elapsed / 60000))
-    seconds=$(((elapsed / 1000) % 60))
-    trace "=== ⏳ Temps écoulé : $minutes min $seconds s" WHITE
-elif (( elapsed > 1000 )); then
-    seconds=$((elapsed / 1000))
-    trace "=== ⏳ Temps écoulé : $seconds s" WHITE
+if (( end > 60000 )); then
+    minutes=$((end / 60000))
+    seconds=$(((end / 1000) % 60))
+    trace "$(msg TIME): $minutes min $seconds s" WHITE
+elif (( end > 1000 )); then
+    end=$((end / 1000))
+    trace "$(msg TIME): $seconds s" WHITE
 else
-    trace "=== ⏳ Temps écoulé : ${elapsed} ms" WHITE
+    trace "$(msg TIME): ${end} ms" WHITE
 fi
 
 exit 0
