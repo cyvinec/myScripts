@@ -11,7 +11,7 @@
 
 ###############################################################
 # === start-up time / temps de démarrage =====================
-###############################################################
+############################################################### 
 start_time=$(date +%s%3N)
 
 ###############################################################
@@ -350,10 +350,10 @@ fi
 # === Compute size / Calcul taille ===========================
 ###############################################################
 #SIZE=$(du -sm "$SOURCE_DIR" | cut -f1)
-SIZE=$(rsync -aL --dry-run --stats ${SOURCE_DIR} ${SOURCE_DIR} | \
+SIZE=$(rsync -aL --dry-run --stats ${SOURCE_DIR} / | \
         grep "Total transferred file size"   | tr -d ','   | \
         awk '{bytes=$5; mb=bytes/1024/1024; if (mb<1) print 1; else printf "%.0f\n", mb*1.15}')
-trace "$(msg CALC_SIZE) $SIZE MB"
+trace "$(msg CALC_SIZE) $SIZE M"
 
 ###############################################################
 # === Space check / Vérif espace =============================
@@ -445,7 +445,7 @@ if (( end > 60000 )); then
     seconds=$(((end / 1000) % 60))
     trace "$(msg TIME): $minutes min $seconds s" LIGHTGRAY
 elif (( end > 1000 )); then
-    end=$((end / 1000))
+    seconds=$((end / 1000))
     trace "$(msg TIME): $seconds s" LIGHTGRAY
 else
     trace "$(msg TIME): ${end} ms" LIGHTGRAY
